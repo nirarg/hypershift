@@ -32,6 +32,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/openshift/hypershift/api"
+	capikubevirt "github.com/openshift/hypershift/api/capk-tmp/v1alpha4"
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/kas"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/util"
@@ -97,6 +98,7 @@ const (
 	// TODO (alberto): Eventually this image will be mirrored and pulled from an internal registry.
 	// This comes from https://console.cloud.google.com/gcr/images/k8s-artifacts-prod
 	imageCAPA = "us.gcr.io/k8s-artifacts-prod/cluster-api-aws/cluster-api-aws-controller:v0.7.0"
+	imageCAPK = "registry:5000/capk:devel"
 )
 
 // NoopReconcile is just a default mutation function that does nothing.
@@ -887,7 +889,7 @@ func (r *HostedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	switch hcluster.Spec.Platform.Type {
 	// We run the AWS controller for NonePlatform for now
 	// So nodePools can be created to expose ign endpoints that can be used for byo machines to join.
-	case hyperv1.AWSPlatform, hyperv1.NonePlatform:
+	case hyperv1.AWSPlatform:
 		// Reconcile external AWSCluster
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(hcp), hcp); err != nil {
 			r.Log.Error(err, "failed to get control plane ref")
@@ -902,6 +904,21 @@ func (r *HostedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, fmt.Errorf("failed to reconcile AWSCluster: %w", err)
 		}
 		infraCR = awsCluster
+	case hyperv1.NonePlatform:
+		// Reconcile external KubevirtCluster
+		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(hcp), hcp); err != nil {
+			r.Log.Error(err, "failed to get control plane ref")
+			return reconcile.Result{}, err
+		}
+
+		kubevirtCluster := controlplaneoperator.KubevirtCluster(controlPlaneNamespace.Name, hcluster.Name)
+		_, err = controllerutil.CreateOrPatch(ctx, r.Client, kubevirtCluster, func() error {
+			return reconcileKubevirtCluster(kubevirtCluster, hcluster)
+		})
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile AWSCluster: %w", err)
+		}
+		infraCR = kubevirtCluster
 	case hyperv1.IBMCloudPlatform:
 		// Reconcile external IBM Cloud Cluster
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(hcp), hcp); err != nil {
@@ -986,6 +1003,12 @@ func (r *HostedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		err = r.reconcileCAPIAWSProvider(ctx, hcluster)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to reconcile capi aws provider: %w", err)
+		}
+	case hyperv1.NonePlatform:
+		// Reconcile the CAPI Kubevirt provider components
+		err = r.reconcileCAPIKubevirtProvider(ctx, hcluster)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile capi kubevirt provider: %w", err)
 		}
 	default:
 		//TODO: add other providers
@@ -1257,6 +1280,52 @@ func (r *HostedClusterReconciler) reconcileCAPIAWSProvider(ctx context.Context, 
 	})
 	if err != nil {
 		return fmt.Errorf("failed to reconcile capi aws provider deployment: %w", err)
+	}
+
+	return nil
+}
+
+// reconcileCAPIKubevirtProvider orchestrates reconciliation of the CAPI Kubevit provider
+// components.
+func (r *HostedClusterReconciler) reconcileCAPIKubevirtProvider(ctx context.Context, hcluster *hyperv1.HostedCluster) error {
+	controlPlaneNamespace := manifests.HostedControlPlaneNamespace(hcluster.Namespace, hcluster.Name)
+	err := r.Client.Get(ctx, client.ObjectKeyFromObject(controlPlaneNamespace), controlPlaneNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to get control plane namespace: %w", err)
+	}
+
+	// Reconcile CAPI AWS provider role
+	capiKubevirtProviderRole := clusterapi.CAPIKubevirtProviderRole(controlPlaneNamespace.Name)
+	_, err = r.CreateOrUpdate(ctx, r.Client, capiKubevirtProviderRole, func() error {
+		return reconcileCAPIAWSProviderRole(capiKubevirtProviderRole)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capi aws provider role: %w", err)
+	}
+
+	// Reconcile CAPI Kubevirt provider service account
+	capiKubevirtProviderServiceAccount := clusterapi.CAPIKubevirtProviderServiceAccount(controlPlaneNamespace.Name)
+	_, err = r.CreateOrUpdate(ctx, r.Client, capiKubevirtProviderServiceAccount, NoopReconcile)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capi kubevirt provider service account: %w", err)
+	}
+
+	// Reconcile CAPI Kubevirt provider role binding
+	capiAwsProviderRoleBinding := clusterapi.CAPIAWSProviderRoleBinding(controlPlaneNamespace.Name)
+	_, err = r.CreateOrUpdate(ctx, r.Client, capiAwsProviderRoleBinding, func() error {
+		return reconcileCAPIAWSProviderRoleBinding(capiAwsProviderRoleBinding, capiKubevirtProviderRole, capiKubevirtProviderServiceAccount)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capi aws provider role binding: %w", err)
+	}
+
+	// Reconcile CAPI AWS provider deployment
+	capiKubevirtProviderDeployment := clusterapi.CAPIKubevirtProviderDeployment(controlPlaneNamespace.Name)
+	_, err = r.CreateOrUpdate(ctx, r.Client, capiKubevirtProviderDeployment, func() error {
+		return reconcileCAPIKubevirtProviderDeployment(capiKubevirtProviderDeployment, hcluster, capiKubevirtProviderServiceAccount)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile capi kubevirt provider deployment: %w", err)
 	}
 
 	return nil
@@ -2067,6 +2136,17 @@ func reconcileAWSCluster(awsCluster *capiawsv1.AWSCluster, hcluster *hyperv1.Hos
 	return nil
 }
 
+func reconcileKubevirtCluster(kubevirtCluster *capikubevirt.KubevirtCluster, hcluster *hyperv1.HostedCluster) error {
+	// We only create this resource once and then let CAPI own it
+	kubevirtCluster.Annotations = map[string]string{
+		hostedClusterAnnotation:    client.ObjectKeyFromObject(hcluster).String(),
+		capiv1.ManagedByAnnotation: "external",
+	}
+	// Set the values for upper level controller
+	kubevirtCluster.Status.Ready = true
+	return nil
+}
+
 func reconcileIBMCloudCluster(ibmCluster *capiibmv1.IBMVPCCluster, hcluster *hyperv1.HostedCluster, apiEndpoint hyperv1.APIEndpoint) error {
 	ibmCluster.Annotations = map[string]string{
 		hostedClusterAnnotation:    client.ObjectKeyFromObject(hcluster).String(),
@@ -2480,6 +2560,120 @@ func reconcileCAPIAWSProviderDeployment(deployment *appsv1.Deployment, hc *hyper
 	return nil
 }
 
+func reconcileCAPIKubevirtProviderDeployment(deployment *appsv1.Deployment, hc *hyperv1.HostedCluster, sa *corev1.ServiceAccount) error {
+	defaultMode := int32(420)
+	capkLabels := map[string]string{
+		"control-plane":               "capk-controller-manager",
+		"app":                         "capk-controller-manager",
+		hyperv1.ControlPlaneComponent: "capk-controller-manager",
+	}
+	deployment.Spec = appsv1.DeploymentSpec{
+		Replicas: k8sutilspointer.Int32Ptr(1),
+		Selector: &metav1.LabelSelector{
+			MatchLabels: capkLabels,
+		},
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: capkLabels,
+			},
+			Spec: corev1.PodSpec{
+				ServiceAccountName:            sa.Name,
+				TerminationGracePeriodSeconds: k8sutilspointer.Int64Ptr(10),
+				Tolerations: []corev1.Toleration{
+					{
+						Key:    "node-role.kubernetes.io/master",
+						Effect: corev1.TaintEffectNoSchedule,
+					},
+				},
+				Volumes: []corev1.Volume{
+					{
+						Name: "capi-webhooks-tls",
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								DefaultMode: &defaultMode,
+								SecretName:  "capi-webhooks-tls",
+							},
+						},
+					},
+				},
+				Containers: []corev1.Container{
+					{
+						Name:            "manager",
+						Image:           imageCAPK,
+						ImagePullPolicy: corev1.PullAlways,
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "capi-webhooks-tls",
+								ReadOnly:  true,
+								MountPath: "/tmp/k8s-webhook-server/serving-certs",
+							},
+						},
+						Env: []corev1.EnvVar{
+							{
+								Name: "MY_NAMESPACE",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{
+										FieldPath: "metadata.namespace",
+									},
+								},
+							},
+						},
+						Command: []string{"/manager"},
+						Args: []string{
+							"--namespace", "$(MY_NAMESPACE)",
+							"--alsologtostderr",
+							"--v=4",
+							"--leader-elect=true",
+						},
+						Ports: []corev1.ContainerPort{
+							{
+								Name:          "healthz",
+								ContainerPort: 9440,
+								Protocol:      corev1.ProtocolTCP,
+							},
+						},
+						LivenessProbe: &corev1.Probe{
+							Handler: corev1.Handler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/healthz",
+									Port: intstr.FromString("healthz"),
+								},
+							},
+						},
+						ReadinessProbe: &corev1.Probe{
+							Handler: corev1.Handler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/readyz",
+									Port: intstr.FromString("healthz"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	hyperutil.SetColocation(hc, deployment)
+	hyperutil.SetControlPlaneIsolation(hc, deployment)
+	hyperutil.SetDefaultPriorityClass(deployment)
+	switch hc.Spec.ControllerAvailabilityPolicy {
+	case hyperv1.HighlyAvailable:
+		maxSurge := intstr.FromInt(1)
+		maxUnavailable := intstr.FromInt(1)
+		deployment.Spec.Strategy.Type = appsv1.RollingUpdateDeploymentStrategyType
+		deployment.Spec.Strategy.RollingUpdate = &appsv1.RollingUpdateDeployment{
+			MaxSurge:       &maxSurge,
+			MaxUnavailable: &maxUnavailable,
+		}
+		deployment.Spec.Replicas = k8sutilspointer.Int32Ptr(3)
+		hyperutil.SetMultizoneSpread(capkLabels, deployment)
+	default:
+		deployment.Spec.Replicas = k8sutilspointer.Int32Ptr(1)
+	}
+
+	return nil
+}
+
 func reconcileCAPIAWSProviderRole(role *rbacv1.Role) error {
 	role.Rules = []rbacv1.PolicyRule{
 		{
@@ -2488,6 +2682,7 @@ func reconcileCAPIAWSProviderRole(role *rbacv1.Role) error {
 				"events",
 				"secrets",
 				"configmaps",
+				"services",
 			},
 			Verbs: []string{"*"},
 		},
@@ -2514,6 +2709,14 @@ func reconcileCAPIAWSProviderRole(role *rbacv1.Role) error {
 			APIGroups: []string{"coordination.k8s.io"},
 			Resources: []string{
 				"leases",
+			},
+			Verbs: []string{"*"},
+		},
+		{
+			APIGroups: []string{"kubevirt.io"},
+			Resources: []string{
+				"virtualmachineinstances",
+				"virtualmachines",
 			},
 			Verbs: []string{"*"},
 		},

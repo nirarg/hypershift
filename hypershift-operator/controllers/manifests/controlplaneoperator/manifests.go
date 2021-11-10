@@ -2,6 +2,7 @@ package controlplaneoperator
 
 import (
 	capiibmv1 "github.com/kubernetes-sigs/cluster-api-provider-ibmcloud/api/v1alpha4"
+	capikubevirt "github.com/openshift/hypershift/api/capk-tmp/v1alpha4"
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
 	prometheusoperatorv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -84,6 +85,15 @@ func HostedControlPlane(controlPlaneNamespace string, hostedClusterName string) 
 
 func AWSCluster(controlPlaneNamespace string, hostedClusterName string) *capiawsv1.AWSCluster {
 	return &capiawsv1.AWSCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: controlPlaneNamespace,
+			Name:      hostedClusterName,
+		},
+	}
+}
+
+func KubevirtCluster(controlPlaneNamespace string, hostedClusterName string) *capikubevirt.KubevirtCluster {
+	return &capikubevirt.KubevirtCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: controlPlaneNamespace,
 			Name:      hostedClusterName,
