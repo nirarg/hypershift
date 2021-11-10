@@ -68,6 +68,15 @@ func CAPIAWSProviderDeployment(controlPlaneNamespace string) *appsv1.Deployment 
 	}
 }
 
+func CAPIKubevirtProviderDeployment(controlPlaneNamespace string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: controlPlaneNamespace,
+			Name:      "capk-controller-manager",
+		},
+	}
+}
+
 func CAPIAWSProviderServiceAccount(controlPlaneNamespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -77,11 +86,29 @@ func CAPIAWSProviderServiceAccount(controlPlaneNamespace string) *corev1.Service
 	}
 }
 
+func CAPIKubevirtProviderServiceAccount(controlPlaneNamespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: controlPlaneNamespace,
+			Name:      "capk-controller-manager",
+		},
+	}
+}
+
 func CAPIAWSProviderRole(controlPlaneNamespace string) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: controlPlaneNamespace,
 			Name:      "capa-manager",
+		},
+	}
+}
+
+func CAPIKubevirtProviderRole(controlPlaneNamespace string) *rbacv1.Role {
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: controlPlaneNamespace,
+			Name:      "capk-manager",
 		},
 	}
 }
