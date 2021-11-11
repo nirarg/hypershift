@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openshift/api/operator/v1alpha1"
 	api "github.com/openshift/hypershift/api"
+	capikubevirt "github.com/openshift/hypershift/api/capk-tmp/v1alpha4"
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests/ignitionserver"
@@ -500,7 +501,12 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 		span.AddEvent("reconciled awsmachinetemplate", trace.WithAttributes(attribute.String("name", machineTemplate.GetName())))
 	case hyperv1.NonePlatform:
 		// TODO: When fleshing out platform None design revisit the right semantic to signal this as conditions in a NodePool.
-		return ctrl.Result{}, nil
+		// return ctrl.Result{}, nil
+		machineTemplate, err = r.reconcileKubevirtMachineTemplate(ctx, hcluster, nodePool, infraID, controlPlaneNamespace)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile KubevirtMachineTemplate: %w", err)
+		}
+		span.AddEvent("reconciled kubevirtmachinetemplate", trace.WithAttributes(attribute.String("name", machineTemplate.GetName())))
 	}
 
 	md := machineDeployment(nodePool, infraID, controlPlaneNamespace)
@@ -552,6 +558,48 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r NodePoolReconciler) reconcileKubevirtMachineTemplate(ctx context.Context,
+	hostedCluster *hyperv1.HostedCluster,
+	nodePool *hyperv1.NodePool,
+	infraID string,
+	controlPlaneNamespace string,
+) (*capikubevirt.KubevirtMachineTemplate, error) {
+
+	log := ctrl.LoggerFrom(ctx)
+	// Get target template and hash.
+	targetKubevirtMachineTemplate, targetTemplateHash := KubevirtMachineTemplate(infraID, hostedCluster, nodePool, controlPlaneNamespace)
+
+	// Get current template and hash.
+	currentTemplateHash := nodePool.GetAnnotations()[nodePoolAnnotationCurrentProviderConfig]
+	currentKubevirtMachineTemplate := &capikubevirt.KubevirtMachineTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%s", nodePool.GetName(), currentTemplateHash),
+			Namespace: controlPlaneNamespace,
+		},
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(currentKubevirtMachineTemplate), currentKubevirtMachineTemplate); err != nil && !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("error getting existing KubevirtMachineTemplate: %w", err)
+	}
+
+	if equality.Semantic.DeepEqual(currentKubevirtMachineTemplate.Spec.Template.Spec, targetKubevirtMachineTemplate.Spec.Template.Spec) {
+		return currentKubevirtMachineTemplate, nil
+	}
+
+	// Otherwise create new template.
+	log.Info("The KubevirtMachineTemplate referenced by this NodePool has changed. Creating a new one")
+	if err := r.Create(ctx, targetKubevirtMachineTemplate); err != nil {
+		return nil, fmt.Errorf("error creating new KubevirtMachineTemplate: %w", err)
+	}
+
+	// Store new template hash.
+	if nodePool.Annotations == nil {
+		nodePool.Annotations = make(map[string]string)
+	}
+	nodePool.Annotations[nodePoolAnnotationCurrentProviderConfig] = targetTemplateHash
+
+	return targetKubevirtMachineTemplate, nil
 }
 
 func (r NodePoolReconciler) reconcileAWSMachineTemplate(ctx context.Context,

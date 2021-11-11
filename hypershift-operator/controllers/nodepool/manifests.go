@@ -3,8 +3,11 @@ package nodepool
 import (
 	"fmt"
 
+	capikubevirt "github.com/openshift/hypershift/api/capk-tmp/v1alpha4"
+	kubevirtv1 "github.com/openshift/hypershift/api/kubevirt-tmp/v1"
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apiresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sutilspointer "k8s.io/utils/pointer"
 	capiaws "sigs.k8s.io/cluster-api-provider-aws/api/v1alpha4"
@@ -37,6 +40,57 @@ func machineHealthCheck(nodePool *hyperv1.NodePool, controlPlaneNamespace string
 	}
 }
 
+func KubevirtMachineTemplate(infraName string, hostedCluster *hyperv1.HostedCluster, nodePool *hyperv1.NodePool, controlPlaneNamespace string) (*capikubevirt.KubevirtMachineTemplate, string) {
+	guestQuantity := apiresource.MustParse("4Gi")
+	kubevirtMachineTemplate := &capikubevirt.KubevirtMachineTemplate{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				nodePoolAnnotation: ctrlclient.ObjectKeyFromObject(nodePool).String(),
+			},
+			Namespace: controlPlaneNamespace,
+		},
+		Spec: capikubevirt.KubevirtMachineTemplateSpec{
+			Template: capikubevirt.KubevirtMachineTemplateResource{
+				Spec: capikubevirt.KubevirtMachineSpec{
+					VMSpec: kubevirtv1.VirtualMachineInstanceSpec{
+						Domain: kubevirtv1.DomainSpec{
+							CPU:    &kubevirtv1.CPU{Cores: 2},
+							Memory: &kubevirtv1.Memory{Guest: &guestQuantity},
+							Devices: kubevirtv1.Devices{
+								Disks: []kubevirtv1.Disk{
+									{
+										Name: "containervolume",
+										DiskDevice: kubevirtv1.DiskDevice{
+											Disk: &kubevirtv1.DiskTarget{
+												Bus: "virtio",
+											},
+										},
+									},
+								},
+							},
+						},
+						Volumes: []kubevirtv1.Volume{
+							{
+								Name: "containervolume",
+								VolumeSource: kubevirtv1.VolumeSource{
+									ContainerDisk: &kubevirtv1.ContainerDiskSource{
+										// TODO nargaman - replace with pre-defined image
+										Image: "quay.io/containerdisks/rhcos:4.9",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	specHash := hashStruct(kubevirtMachineTemplate.Spec.Template.Spec)
+	kubevirtMachineTemplate.SetName(fmt.Sprintf("%s-%s", nodePool.GetName(), specHash))
+
+	return kubevirtMachineTemplate, specHash
+}
 func AWSMachineTemplate(infraName, ami string, hostedCluster *hyperv1.HostedCluster, nodePool *hyperv1.NodePool, controlPlaneNamespace string) (*capiaws.AWSMachineTemplate, string) {
 	subnet := &capiaws.AWSResourceReference{}
 	if nodePool.Spec.Platform.AWS.Subnet != nil {
