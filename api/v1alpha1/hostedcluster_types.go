@@ -524,6 +524,13 @@ type PlatformSpec struct {
 
 	// Azure defines azure specific settings
 	Azure *AzurePlatformSpec `json:"azure,omitempty"`
+
+	Kubevirt *KubevirtPlatformSpec `json:"kubevirt,omitempty"`
+}
+
+// KubevirtPlatformSpec specifies configuration for agent-based installations.
+type KubevirtPlatformSpec struct {
+	Credentials corev1.LocalObjectReference `json:"credentials"`
 }
 
 // AgentPlatformSpec specifies configuration for agent-based installations.

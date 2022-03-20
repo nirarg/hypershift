@@ -3764,6 +3764,36 @@ sigs.k8s.io/cluster-api-provider-kubevirt/api/v1alpha1.VirtualMachineTemplateSpe
 </tr>
 </tbody>
 </table>
+###KubevirtPlatformSpec { #hypershift.openshift.io/v1alpha1.KubevirtPlatformSpec }
+<p>
+(<em>Appears on:</em>
+<a href="#hypershift.openshift.io/v1alpha1.PlatformSpec">PlatformSpec</a>)
+</p>
+<p>
+<p>KubevirtPlatformSpec specifies configuration for agent-based installations.</p>
+</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>credentials</code></br>
+<em>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#localobjectreference-v1-core">
+Kubernetes core/v1.LocalObjectReference
+</a>
+</em>
+</td>
+<td>
+</td>
+</tr>
+</tbody>
+</table>
 ###LoadBalancerPublishingStrategy { #hypershift.openshift.io/v1alpha1.LoadBalancerPublishingStrategy }
 <p>
 (<em>Appears on:</em>
@@ -4660,6 +4690,18 @@ AzurePlatformSpec
 </td>
 <td>
 <p>Azure defines azure specific settings</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>kubevirt</code></br>
+<em>
+<a href="#hypershift.openshift.io/v1alpha1.KubevirtPlatformSpec">
+KubevirtPlatformSpec
+</a>
+</em>
+</td>
+<td>
 </td>
 </tr>
 </tbody>

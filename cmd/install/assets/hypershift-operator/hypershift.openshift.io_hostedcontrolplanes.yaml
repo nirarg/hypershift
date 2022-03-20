@@ -562,6 +562,23 @@ spec:
                           provider within IBM Cloud.
                         type: string
                     type: object
+                  kubevirt:
+                    description: KubevirtPlatformSpec specifies configuration for
+                      agent-based installations.
+                    properties:
+                      credentials:
+                        description: LocalObjectReference contains enough information
+                          to let you locate the referenced object inside the same
+                          namespace.
+                        properties:
+                          name:
+                            description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              TODO: Add other useful fields. apiVersion, kind, uid?'
+                            type: string
+                        type: object
+                    required:
+                    - credentials
+                    type: object
                   type:
                     description: Type is the type of infrastructure provider for the
                       cluster.

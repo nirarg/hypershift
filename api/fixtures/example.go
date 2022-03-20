@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/client-go/tools/clientcmd"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,6 +14,7 @@ import (
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
 
 	apiresource "k8s.io/apimachinery/pkg/api/resource"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	capikubevirt "sigs.k8s.io/cluster-api-provider-kubevirt/api/v1alpha1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -339,8 +341,29 @@ web_identity_token_file = /var/run/secrets/openshift/serviceaccount/token
 		resources = agentResources.AsObjects()
 		services = getServicePublishingStrategyMappingByAPIServerAddress(o.Agent.APIServerAddress)
 	case o.Kubevirt != nil:
+		kubeContent, err := loadKubeConfigContent()
+		if err != nil {
+			panic("load kubeconfig error")
+		}
+		credentialSecret := &corev1.Secret{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "v1",
+				Kind:       "Secret",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      o.Name + "-cloud-credentials",
+				Namespace: namespace.Name,
+			},
+			Data: map[string][]byte{
+				"KUBECONFIG": kubeContent,
+			},
+		}
+		resources = append(resources, credentialSecret)
 		platformSpec = hyperv1.PlatformSpec{
 			Type: hyperv1.KubevirtPlatform,
+			Kubevirt: &hyperv1.KubevirtPlatformSpec{
+				Credentials: corev1.LocalObjectReference{Name: credentialSecret.Name},
+			},
 		}
 		switch o.Kubevirt.ServicePublishingStrategy {
 		case "NodePort":
@@ -633,6 +656,41 @@ web_identity_token_file = /var/run/secrets/openshift/serviceaccount/token
 		Cluster:               cluster,
 		NodePools:             nodePools,
 	}
+}
+
+// LoadKubeConfigContent returns the kubeconfig file content
+func loadKubeConfigContent() ([]byte, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	configOverrides := &clientcmd.ConfigOverrides{}
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	rawConfig, err := clientConfig.RawConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	// Remove anything that is not related to the current context from the result rawConfig
+	currentContextValue := rawConfig.Contexts[rawConfig.CurrentContext]
+	if currentContextValue == nil {
+		return nil, fmt.Errorf("currentContext is not included in rawConfig.Contexts")
+	}
+
+	rawConfig.Contexts = map[string]*clientcmdapi.Context{
+		rawConfig.CurrentContext: currentContextValue,
+	}
+
+	if v, ok := rawConfig.Clusters[currentContextValue.Cluster]; ok {
+		rawConfig.Clusters = map[string]*clientcmdapi.Cluster{
+			currentContextValue.Cluster: v,
+		}
+	}
+
+	if v, ok := rawConfig.AuthInfos[currentContextValue.AuthInfo]; ok {
+		rawConfig.AuthInfos = map[string]*clientcmdapi.AuthInfo{
+			currentContextValue.AuthInfo: v,
+		}
+	}
+
+	return clientcmd.Write(rawConfig)
 }
 
 func getIngressServicePublishingStrategyMapping() []hyperv1.ServicePublishingStrategyMapping {
