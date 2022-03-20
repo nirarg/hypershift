@@ -2,6 +2,7 @@ package kubevirt
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
@@ -147,7 +148,23 @@ func (p Kubevirt) CAPIProviderDeploymentSpec(hcluster *hyperv1.HostedCluster, _ 
 func (p Kubevirt) ReconcileCredentials(ctx context.Context, c client.Client, createOrUpdate upsert.CreateOrUpdateFN,
 	hcluster *hyperv1.HostedCluster,
 	controlPlaneNamespace string) error {
-	return nil
+	var source corev1.Secret
+	name := client.ObjectKey{Namespace: hcluster.Namespace, Name: hcluster.Spec.Platform.Kubevirt.Credentials.Name}
+	if err := c.Get(ctx, name, &source); err != nil {
+		return fmt.Errorf("failed to get secret %s: %w", name, err)
+	}
+
+	target := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: controlPlaneNamespace, Name: name.Name}}
+	_, err := createOrUpdate(ctx, c, target, func() error {
+		if target.Data == nil {
+			target.Data = map[string][]byte{}
+		}
+		for k, v := range source.Data {
+			target.Data[k] = v
+		}
+		return nil
+	})
+	return err
 }
 
 func (Kubevirt) ReconcileSecretEncryption(ctx context.Context, c client.Client, createOrUpdate upsert.CreateOrUpdateFN,
