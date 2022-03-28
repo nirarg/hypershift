@@ -36,6 +36,7 @@ import (
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedapicache"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/cloud/aws"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/cloud/azure"
+	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/cloud/kubevirt"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/clusterpolicy"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/common"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/configoperator"
@@ -565,6 +566,12 @@ func (r *HostedControlPlaneReconciler) update(ctx context.Context, hostedControl
 	// Reconcile Cloud Provider Config
 	r.Log.Info("Reconciling cloud provider config")
 	if err := r.reconcileCloudProviderConfig(ctx, hostedControlPlane); err != nil {
+		return fmt.Errorf("failed to reconcile cloud provider config: %w", err)
+	}
+
+	// Reconcile External cloud provider controller (if needed)
+	r.Log.Info("Reconciling cloud provider controller")
+	if err := r.reconcileExternalCloudProvider(ctx, hostedControlPlane); err != nil {
 		return fmt.Errorf("failed to reconcile cloud provider config: %w", err)
 	}
 
@@ -1273,6 +1280,29 @@ func (r *HostedControlPlaneReconciler) reconcilePKI(ctx context.Context, hcp *hy
 	return nil
 }
 
+func (r *HostedControlPlaneReconciler) reconcileExternalCloudProvider(ctx context.Context, hcp *hyperv1.HostedControlPlane) error {
+	switch hcp.Spec.Platform.Type {
+	case hyperv1.KubevirtPlatform:
+		// 1. create ServiceAccount
+		cloudProviderSA := manifests.KubevirtCloudProviderServiceAccount()
+		if _, err := r.CreateOrUpdate(ctx, r, cloudProviderSA, func() error {
+			return kubevirt.ReconcileCloudProviderServiceAccount(cloudProviderSA)
+		}); err != nil {
+			return fmt.Errorf("failed to reconcile catalog rollout service account: %w", err)
+		}
+
+		// 2. Create DaemonSet
+		cloudProviderDS := manifests.KubevirtCloudProviderDaemonSet()
+		if _, err := r.CreateOrUpdate(ctx, r, cloudProviderDS, func() error {
+			return kubevirt.ReconcileCloudControllerManagerDaemonSet(cloudProviderDS)
+		}); err != nil {
+			return fmt.Errorf("failed to reconcile catalog rollout service account: %w", err)
+		}
+
+	}
+	return nil
+}
+
 func (r *HostedControlPlaneReconciler) reconcileCloudProviderConfig(ctx context.Context, hcp *hyperv1.HostedControlPlane) error {
 	switch hcp.Spec.Platform.Type {
 	case hyperv1.AWSPlatform:
@@ -1301,6 +1331,21 @@ func (r *HostedControlPlaneReconciler) reconcileCloudProviderConfig(ctx context.
 			return azure.ReconcileCloudConfigWithCredentials(withSecrets, hcp, credentialsSecret)
 		}); err != nil {
 			return fmt.Errorf("failed to reconcile Azure cloud config with credentials: %w", err)
+		}
+	case hyperv1.KubevirtPlatform:
+		credentialsSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: hcp.Namespace, Name: hcp.Spec.Platform.Kubevirt.Credentials.Name}}
+		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(credentialsSecret), credentialsSecret); err != nil {
+			return fmt.Errorf("failed to get Kubevirt credentials secret: %w", err)
+		}
+		secret := manifests.KubevirtCloudConfigSecret(hcp.Namespace)
+		if _, err := r.CreateOrUpdate(ctx, r, secret, func() error {
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data["cloud-config"] = credentialsSecret.Data["KUBECONFIG"]
+			return nil
+		}); err != nil {
+			return fmt.Errorf("failed to reconcile Kubevirt cloud config with credentials: %w", err)
 		}
 	}
 	return nil
