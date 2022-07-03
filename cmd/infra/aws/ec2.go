@@ -213,11 +213,13 @@ func (o *CreateInfraOptions) CreateSubnet(l logr.Logger, client ec2iface.EC2API,
 		l.Info("Found existing subnet", "name", name, "id", subnetID)
 		return subnetID, nil
 	}
+	outpostArn := "arn:aws:outposts:us-east-1:320667403945:outpost/op-0a759e7fbceffcb86"
 	result, err := client.CreateSubnet(&ec2.CreateSubnetInput{
 		AvailabilityZone:  aws.String(zone),
 		VpcId:             aws.String(vpcID),
 		CidrBlock:         aws.String(cidr),
 		TagSpecifications: o.ec2TagSpecifications("subnet", name),
+		OutpostArn:        &outpostArn,
 	})
 	if err != nil {
 		return "", fmt.Errorf("cannot create public subnet: %w", err)

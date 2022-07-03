@@ -154,11 +154,12 @@ func (o *CreateInfraOptions) CreateInfra(ctx context.Context, l logr.Logger) (*C
 		BaseDomain:  o.BaseDomain,
 	}
 	if len(o.Zones) == 0 {
-		zone, err := o.firstZone(l, ec2Client)
-		if err != nil {
-			return nil, err
-		}
-		o.Zones = append(o.Zones, zone)
+		// zone, err := o.firstZone(l, ec2Client)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// o.Zones = append(o.Zones, zone)
+		o.Zones = append(o.Zones, "us-east-1a")
 	}
 
 	// VPC resources
